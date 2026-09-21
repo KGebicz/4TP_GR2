@@ -1,0 +1,35 @@
+def pobierz_punkty():
+    return int(input("Podaj liczbę punktów: "))
+
+
+def oblicz_procent(punkty, maks_punktow):
+    return punkty / maks_punktow * 100
+
+
+def wystaw_ocene(procent):
+    if procent >= 90:
+        return 5
+    elif procent >= 75:
+        return 4
+    elif procent >= 50:
+        return 3
+    elif procent >= 30:
+        return 2
+    else:
+        return 1
+
+
+def main():
+    maks_punktow = 50
+
+    punkty = pobierz_punkty()
+    procent = oblicz_procent(punkty, maks_punktow)
+    ocena = wystaw_ocene(procent)
+
+    print(f"Zdobyto: {punkty}/{maks_punktow} punktów")
+    print(f"Procent: {procent:.1f}%")
+    print(f"Ocena: {ocena}")
+
+
+if __name__ == "__main__":
+    main()
