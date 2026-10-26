@@ -1,0 +1,314 @@
+package com.example.myapplication;
+
+import android.os.Bundle;
+import android.view.ViewGroup;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.recyclerview.widget.LinearLayoutManager;   // RECYCLERVIEW: układa elementy w linii
+import androidx.recyclerview.widget.RecyclerView;          // RECYCLERVIEW: sama lista
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+public class MainActivity extends AppCompatActivity {
+
+    private EditText fileNameInput;   // pole z nazwą pliku
+    private EditText editor;          // duże pole tekstowe
+
+    // ===================== RECYCLERVIEW: POLA =====================
+    private RecyclerView openFilesRecyclerView;  // referencja do widoku listy z XML
+    private FilesAdapter adapter;                // adapter dostarczający widoki do listy
+
+    // Źródło danych listy: nazwy otwartych plików. Co jest tu, to widać na ekranie.
+    private final List<String> openFiles = new ArrayList<>();
+    // ==============================================================
+
+    // Aktualna treść każdego otwartego pliku (także niezapisana): nazwa -> tekst
+    private final Map<String, String> contents = new HashMap<>();
+
+    private String currentFile = null;  // nazwa aktualnie wyświetlanego pliku
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_main);  // wczytuje layout XML
+
+        fileNameInput = findViewById(R.id.fileNameInput);
+        editor = findViewById(R.id.editor);
+
+        // ============ RECYCLERVIEW: KONFIGURACJA W onCreate ============
+        // Podpięcie widoku z XML (id: openFilesRecyclerView) do zmiennej w kodzie.
+        openFilesRecyclerView = findViewById(R.id.openFilesRecyclerView);
+
+        // LayoutManager mówi, JAK układać elementy. Bez niego lista nic nie wyświetli!
+        // this = kontekst, HORIZONTAL = karty obok siebie, false = nie odwracaj kolejności.
+        openFilesRecyclerView.setLayoutManager(
+                new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+
+        // Tworzymy adapter (klasa zagnieżdżona niżej w pliku).
+        adapter = new FilesAdapter();
+
+        // Podpinamy adapter do listy. Od tej chwili RecyclerView pyta go o dane.
+        openFilesRecyclerView.setAdapter(adapter);
+        // ===============================================================
+
+        Button openButton = findViewById(R.id.openButton);
+        Button saveButton = findViewById(R.id.saveButton);
+        Button deleteButton = findViewById(R.id.deleteButton);
+        Button newButton = findViewById(R.id.newButton);
+        Button closeButton = findViewById(R.id.closeButton);
+
+        // Podpięcie przycisków do metod
+        openButton.setOnClickListener(v -> openFile());
+        saveButton.setOnClickListener(v -> saveFile());
+        deleteButton.setOnClickListener(v -> deleteFile());
+        newButton.setOnClickListener(v -> newFile());
+        closeButton.setOnClickListener(v -> closeFile());
+    }
+
+    // ===================== RECYCLERVIEW: ADAPTER =====================
+    // Adapter to pośrednik między danymi (openFiles) a widokami na ekranie.
+    // "private class" (bez static) = ma dostęp do pól MainActivity (openFiles, switchToFile).
+    // <FilesAdapter.VH> = mówi, jakiego ViewHoldera używamy.
+    private class FilesAdapter extends RecyclerView.Adapter<FilesAdapter.VH> {
+
+        // ViewHolder trzyma referencje do widoków jednego elementu listy,
+        // żeby nie robić za każdym razem wolnego findViewById.
+        class VH extends RecyclerView.ViewHolder {
+            final TextView name;   // jedyny widok w elemencie: nazwa pliku
+
+            VH(TextView tv) {
+                super(tv);         // przekazuje widok do klasy bazowej (dostępny jako itemView)
+                name = tv;         // zapamiętujemy go w polu
+            }
+        }
+
+        // Wywoływana, gdy RecyclerView potrzebuje NOWEGO pustego widoku elementu.
+        // Dzieje się to tylko kilka razy (tyle, ile mieści ekran), potem widoki są używane ponownie.
+        @NonNull
+        @Override
+        public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+            // Tworzymy TextView w kodzie (zamiast osobnego pliku XML).
+            TextView tv = new TextView(parent.getContext());
+
+            // Parametry rozmiaru: szerokość i wysokość dopasowane do zawartości.
+            RecyclerView.LayoutParams lp = new RecyclerView.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,   // szerokość = szerokość tekstu
+                    ViewGroup.LayoutParams.WRAP_CONTENT);  // wysokość = wysokość tekstu
+            lp.setMargins(4, 4, 4, 4);        // odstęp zewnętrzny (lewo, góra, prawo, dół) w pikselach
+            tv.setLayoutParams(lp);           // przypisanie parametrów do widoku
+            tv.setPadding(32, 24, 32, 24);    // odstęp wewnętrzny wokół tekstu (w pikselach)
+            tv.setTextSize(14);               // rozmiar tekstu w sp
+            tv.setBackgroundResource(android.R.drawable.btn_default); // tło jak przycisk
+
+            return new VH(tv);                // opakowujemy widok w ViewHoldera i zwracamy
+        }
+
+        // Wywoływana, gdy element na pozycji "position" ma pokazać dane.
+        // Widoki są recyklingowane, więc TUTAJ ustawiamy wszystko, co zależy od danych.
+        @Override
+        public void onBindViewHolder(@NonNull VH holder, int position) {
+            String name = openFiles.get(position);   // nazwa pliku z listy danych
+            holder.name.setText(name);               // wpisujemy ją do TextView
+            // Kliknięcie karty przełącza edytor na ten plik.
+            holder.itemView.setOnClickListener(v -> switchToFile(name));
+        }
+
+        // Mówi RecyclerView, ile jest elementów. 0 = pusta lista.
+        @Override
+        public int getItemCount() {
+            return openFiles.size();
+        }
+    }
+    // ================================================================
+
+    // ---------- operacje na kartach ----------
+
+    // Zapamiętuje treść edytora dla aktualnego pliku (żeby nie zginęła przy przełączeniu).
+    private void stashCurrent() {
+        if (currentFile != null) {
+            contents.put(currentFile, editor.getText().toString());
+        }
+    }
+
+    // Pokazuje w edytorze plik, który jest już na liście otwartych.
+    private void showFile(String fileName) {
+        currentFile = fileName;
+        String text = contents.get(fileName);
+        editor.setText(text != null ? text : "");
+        fileNameInput.setText(fileName);
+    }
+
+    // ============ RECYCLERVIEW: DODAWANIE KARTY ============
+    private void addToOpenList(String fileName) {
+        if (!openFiles.contains(fileName)) {                      // nie dodawaj duplikatów
+            openFiles.add(fileName);                              // 1. najpierw zmień dane
+            adapter.notifyItemInserted(openFiles.size() - 1);     // 2. potem powiadom adapter o nowym elemencie
+            openFilesRecyclerView.scrollToPosition(openFiles.size() - 1); // 3. przewiń do nowej karty
+        }
+    }
+    // =======================================================
+
+    // ============ RECYCLERVIEW: USUWANIE KARTY ============
+    private void removeFromOpenList(String fileName) {
+        int index = openFiles.indexOf(fileName);   // pozycja karty na liście (-1 jeśli brak)
+        if (index >= 0) {
+            openFiles.remove(index);               // 1. najpierw usuń z danych
+            adapter.notifyItemRemoved(index);      // 2. potem powiadom adapter, żeby usunął kartę z ekranu
+        }
+        contents.remove(fileName);                 // usuwamy też zapamiętaną treść
+    }
+    // ======================================================
+
+    // Po zamknięciu/usunięciu pokazuje ostatnią kartę albo czyści edytor.
+    private void showLastOrClear() {
+        if (!openFiles.isEmpty()) {
+            showFile(openFiles.get(openFiles.size() - 1));
+        } else {
+            currentFile = null;
+            editor.setText("");
+        }
+    }
+
+    // Przełączenie na inną kartę (wywoływane po kliknięciu karty w RecyclerView).
+    private void switchToFile(String fileName) {
+        if (fileName.equals(currentFile)) return;  // już jest wyświetlany
+        stashCurrent();                            // zapamiętaj zmiany w starym pliku
+        showFile(fileName);                        // pokaż nowy
+    }
+
+    // ---------- przyciski ----------
+
+    // "Otwórz": wczytuje plik z pamięci wewnętrznej lub assets i dodaje kartę.
+    private void openFile() {
+        String fileName = fileNameInput.getText().toString().trim();
+        if (fileName.isEmpty()) {
+            toast("Podaj nazwę pliku");
+            return;
+        }
+
+        if (openFiles.contains(fileName)) {   // już otwarty: tylko przełącz
+            switchToFile(fileName);
+            return;
+        }
+
+        try {
+            String text = readFile(fileName);  // wczytaj z dysku
+            stashCurrent();                    // zapamiętaj bieżący plik
+            contents.put(fileName, text);      // zapisz treść nowego pliku w mapie
+            addToOpenList(fileName);           // dodaj kartę (RecyclerView)
+            showFile(fileName);                // pokaż w edytorze
+        } catch (IOException e) {
+            toast("Nie można otworzyć pliku: " + e.getMessage());
+        }
+    }
+
+    // "Nowy": tworzy pusty plik (na dysku pojawi się dopiero po "Zapisz").
+    private void newFile() {
+        String fileName = fileNameInput.getText().toString().trim();
+        if (fileName.isEmpty()) {
+            toast("Podaj nazwę pliku");
+            return;
+        }
+
+        if (openFiles.contains(fileName)) {
+            switchToFile(fileName);
+            return;
+        }
+
+        stashCurrent();
+        contents.put(fileName, "");   // pusta treść
+        addToOpenList(fileName);      // dodaj kartę (RecyclerView)
+        showFile(fileName);
+    }
+
+    // "Zapisz": zapisuje treść edytora do pliku w pamięci wewnętrznej.
+    private void saveFile() {
+        if (currentFile == null) {
+            toast("Najpierw otwórz plik");
+            return;
+        }
+
+        String text = editor.getText().toString();
+        File file = new File(getFilesDir(), currentFile);
+        try (FileOutputStream fos = new FileOutputStream(file)) {
+            fos.write(text.getBytes(StandardCharsets.UTF_8));
+            contents.put(currentFile, text);
+            toast("Zapisano: " + currentFile);
+        } catch (IOException e) {
+            toast("Błąd zapisu: " + e.getMessage());
+        }
+    }
+
+    // "Zamknij": zamyka kartę bez usuwania pliku z dysku.
+    private void closeFile() {
+        if (currentFile == null) {
+            toast("Brak otwartego pliku");
+            return;
+        }
+
+        removeFromOpenList(currentFile);   // usuń kartę (RecyclerView)
+        showLastOrClear();
+    }
+
+    // "Usuń": kasuje plik z dysku i zamyka kartę.
+    private void deleteFile() {
+        if (currentFile == null) {
+            toast("Najpierw otwórz plik");
+            return;
+        }
+
+        File file = new File(getFilesDir(), currentFile);
+        if (file.exists() && !file.delete()) {
+            toast("Nie udało się usunąć pliku");
+            return;
+        }
+
+        toast("Usunięto: " + currentFile);
+        removeFromOpenList(currentFile);   // usuń kartę (RecyclerView)
+        showLastOrClear();
+    }
+
+    // ---------- I/O ----------
+
+    // Czyta plik: najpierw z pamięci wewnętrznej, a jeśli go tam nie ma, z assets.
+    private String readFile(String fileName) throws IOException {
+        File internal = new File(getFilesDir(), fileName);
+        InputStream is;
+        if (internal.exists()) {
+            is = new FileInputStream(internal);
+        } else {
+            is = getAssets().open(fileName);
+        }
+
+        StringBuilder content = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(is, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                content.append(line).append("\n");
+            }
+        }
+        return content.toString();
+    }
+
+    // Skrócony zapis wyświetlania komunikatu Toast.
+    private void toast(String msg) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
+}
